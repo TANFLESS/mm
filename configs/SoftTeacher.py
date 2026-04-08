@@ -1,34 +1,37 @@
-"""SoftTeacher（完整版，显式展开版）。
+"""SoftTeacher 实验配置（尽量保持与你原文件结构一致）。
 
-目标：
-- 保留“所有关键部件都在一个文件里看得见”的体验；
-- 明确标注哪些是文档展示内容、哪些是为可运行补充；
-- 明确标注主要来源文件，便于你后续追溯。
-
-主要来源：
-1) 文档：docs user_guides/semi_det（展示半监督核心流程）
-2) 官方数据基线：thirdparty/mmdetection-3.3.0/configs/_base_/datasets/semi_coco_detection.py
-3) 官方SoftTeacher配置：thirdparty/mmdetection-3.3.0/configs/soft_teacher/
-   soft-teacher_faster-rcnn_r50-caffe_fpn_180k_semi-0.1-coco.py
+说明：
+1) 该文件保留了你原本“在本文件里直接写 pipeline + dataset + model”的组织方式；
+2) 同时补齐了你原文件里缺失的关键变量定义，避免运行时报 NameError；
+3) 将“你最常改的数据集路径相关参数”集中放到文件顶部，方便直接改。
 """
 
 # ============================================================================
-# [补充] 0) 便于修改的路径参数（文档里通常不会集中写在最顶部）
-# 来源：你的使用习惯 + 官方配置字段
+# 0) 你最常改的路径参数（放在最顶端，方便直接修改）
 # ============================================================================
+# COCO 数据根目录（建议保持以 / 结尾）
 DATA_ROOT = 'data/coco/'
+
+# 有监督数据（带框）标注文件与图片目录
 LABELED_ANN_FILE = 'annotations/instances_train2017.json'
 LABELED_IMG_PREFIX = 'train2017/'
+
+# 无监督数据（无框/空标注）标注文件与图片目录
 UNLABELED_ANN_FILE = 'annotations/instances_unlabeled2017.json'
 UNLABELED_IMG_PREFIX = 'unlabeled2017/'
+
+# 验证集（可按需修改）
 VAL_ANN_FILE = 'annotations/instances_val2017.json'
 VAL_IMG_PREFIX = 'val2017/'
 
 
 # ============================================================================
-# [文档/官方示例] 1) 继承基础配置
-# 来源：soft-teacher_faster-rcnn_r50-caffe_fpn_180k_semi-0.1-coco.py
+# 1) 继承基础配置
 # ============================================================================
+# 这里仍然继承官方 model/runtime/dataset base：
+# - model: faster-rcnn_r50_fpn
+# - runtime: 默认训练 hooks/logger/runtime
+# - dataset: semi_coco_detection（我们会在当前文件里按你的风格覆盖）
 _base_ = [
     '../thirdparty/mmdetection-3.3.0/configs/_base_/models/faster-rcnn_r50_fpn.py',
     '../thirdparty/mmdetection-3.3.0/configs/_base_/default_runtime.py',
@@ -37,14 +40,13 @@ _base_ = [
 
 
 # ============================================================================
-# [文档摘录 + 可运行补齐] 2) dataset/pipeline 基础变量
-# 来源：_base_/datasets/semi_coco_detection.py
-# 说明：这些变量如果不显式给出，很多“文档片段”粘贴后会报 NameError。
+# 2) 数据与增强基础参数（你原文件缺失的关键变量）
 # ============================================================================
 dataset_type = 'CocoDataset'
 data_root = DATA_ROOT
 backend_args = None
 
+# RandAugment 的颜色变换空间
 color_space = [
     [dict(type='ColorTransform')],
     [dict(type='AutoContrast')],
@@ -57,6 +59,7 @@ color_space = [
     [dict(type='Brightness')],
 ]
 
+# RandAugment 的几何变换空间
 geometric = [
     [dict(type='Rotate')],
     [dict(type='ShearX')],
@@ -65,19 +68,21 @@ geometric = [
     [dict(type='TranslateY')],
 ]
 
+# 多尺度训练范围
 scale = [(1333, 400), (1333, 1200)]
+
+# MultiBranch 会把 batch 显式拆分为这 3 个分支
 branch_field = ['sup', 'unsup_teacher', 'unsup_student']
 
-# [补充] dataloader 常用默认值（来自官方 base）
+# dataloader 基础参数
 batch_size = 5
 num_workers = 5
 
 
 # ============================================================================
-# [文档展示核心] 3) 三分支 pipeline（半监督最关键部分）
-# 来源：_base_/datasets/semi_coco_detection.py + semi_det 文档示例
+# 3) 多分支数据流程（保持你原本写法）
 # ============================================================================
-# 有监督分支：送入 student 做监督损失
+# （1）有监督分支：用于 student 监督学习
 sup_pipeline = [
     dict(type='LoadImageFromFile', backend_args=backend_args),
     dict(type='LoadAnnotations', with_bbox=True),
@@ -91,7 +96,7 @@ sup_pipeline = [
         sup=dict(type='PackDetInputs'))
 ]
 
-# 无监督 teacher 分支：弱增强，teacher 在这路上产伪标签
+# （2）无监督 teacher 分支：弱增强，用于 teacher 生成伪标签
 weak_pipeline = [
     dict(type='RandomResize', scale=scale, keep_ratio=True),
     dict(type='RandomFlip', prob=0.5),
@@ -102,7 +107,7 @@ weak_pipeline = [
                    'homography_matrix')),
 ]
 
-# 无监督 student 分支：强增强，student 学习伪标签
+# （3）无监督 student 分支：强增强，用于 student 学习伪标签
 strong_pipeline = [
     dict(type='RandomResize', scale=scale, keep_ratio=True),
     dict(type='RandomFlip', prob=0.5),
@@ -121,7 +126,7 @@ strong_pipeline = [
                    'homography_matrix')),
 ]
 
-# 无监督样本进入后拆成 teacher/student 两路
+# 无监督样本先 LoadImage/LoadEmptyAnnotations，再拆 teacher/student 两路
 unsup_pipeline = [
     dict(type='LoadImageFromFile', backend_args=backend_args),
     dict(type='LoadEmptyAnnotations'),
@@ -133,6 +138,7 @@ unsup_pipeline = [
     )
 ]
 
+# 验证/测试 pipeline
 test_pipeline = [
     dict(type='LoadImageFromFile', backend_args=backend_args),
     dict(type='Resize', scale=(1333, 800), keep_ratio=True),
@@ -144,8 +150,7 @@ test_pipeline = [
 
 
 # ============================================================================
-# [文档有示例，以下是可运行补齐] 4) dataset/dataloader/evaluator
-# 来源：_base_/datasets/semi_coco_detection.py
+# 4) 数据集与 dataloader
 # ============================================================================
 labeled_dataset = dict(
     type=dataset_type,
@@ -203,8 +208,7 @@ test_evaluator = val_evaluator
 
 
 # ============================================================================
-# [文档展示核心 + 官方soft-teacher config] 5) 模型
-# 来源：soft-teacher_faster-rcnn_r50-caffe_fpn_180k_semi-0.1-coco.py
+# 5) 半监督模型（保持官方 SoftTeacher 参数）
 # ============================================================================
 detector = _base_.model
 detector.data_preprocessor = dict(
@@ -234,13 +238,18 @@ model = dict(
         type='MultiBranchDataPreprocessor',
         data_preprocessor=detector.data_preprocessor),
     semi_train_cfg=dict(
+        # teacher 参数通过 EMA 更新，不参与梯度训练
         freeze_teacher=True,
+        # 监督与无监督损失权重
         sup_weight=1.0,
         unsup_weight=4.0,
+        # 伪标签筛选阈值
         pseudo_label_initial_score_thr=0.5,
         rpn_pseudo_thr=0.9,
         cls_pseudo_thr=0.9,
+        # 回归分支不确定性过滤阈值
         reg_pseudo_thr=0.02,
+        # 对伪框进行 jitter 来估计回归稳定性
         jitter_times=10,
         jitter_scale=0.06,
         min_pseudo_bbox_wh=(1e-2, 1e-2)),
@@ -248,8 +257,7 @@ model = dict(
 
 
 # ============================================================================
-# [补充但基本等同官方] 6) 训练策略与 hooks
-# 来源：soft-teacher_faster-rcnn_r50-caffe_fpn_180k_semi-0.1-coco.py
+# 6) 训练调度与 hooks
 # ============================================================================
 train_cfg = dict(type='IterBasedTrainLoop', max_iters=180000, val_interval=5000)
 val_cfg = dict(type='TeacherStudentValLoop')
@@ -270,7 +278,13 @@ optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001))
 
+# 保存与日志策略
+# - by_epoch=False: 与 IterBasedTrainLoop 对齐
+# - interval=10000: 每 1w iter 存一次
+# - max_keep_ckpts=2: 防止磁盘占满
 default_hooks = dict(
     checkpoint=dict(by_epoch=False, interval=10000, max_keep_ckpts=2))
 log_processor = dict(by_epoch=False)
+
+# MeanTeacherHook：核心的 teacher EMA 更新机制
 custom_hooks = [dict(type='MeanTeacherHook')]
